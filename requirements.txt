@@ -1,0 +1,7 @@
+numpy==1.26.4 # Due to a incompactibility between numpy 2.x and torch 2.2.0
+lightning==2.5.0.post0
+transformers==4.49.0
+datasets==3.3.2
+matplotlib==3.9.0
+seaborn==0.13.2
+protobuf==6.30.2
