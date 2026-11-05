@@ -19,7 +19,49 @@ from helpers import load_model, load_args_defaults, paths_definitions, load_hf_m
 
 
 #  Based on the code from https://zenodo.org/records/10866595
+def evaluate_test_perplexity(plt_model, test_dataloader, device):
+    """Matches GenTrainModule's test_mean_perp: exp of the unweighted mean batch loss."""
+    amp_dtype = torch.float16 if device.type == 'cuda' else torch.bfloat16
+    plt_model.to(device).eval()
+    losses = []
+    with torch.no_grad(), torch.autocast(device_type=device.type, dtype=amp_dtype):
+        for batch in test_dataloader:
+            loss, _ = plt_model(batch['input_ids'].to(device), batch['attention_mask'].to(device),
+                                batch['labels'].to(device))
+            losses.append(loss.float())
+    return torch.exp(torch.stack(losses).mean()).item()
+
+
+def write_checkpoint_metrics(args, plt_model, trainer, checkpoint_callback, data_loader):
+    """Records both model states in an iteration without changing the run itself.
+
+    Test reporting and generation use the final-epoch weights, while the next iteration starts from the best
+    validation checkpoint. Evaluating both leaves the weights and random state as they were.
+    """
+    device = torch.device('cuda' if args.cuda else 'cpu')
+    final_state = {k: v.detach().cpu().clone() for k, v in plt_model.state_dict().items()}
+    with torch.random.fork_rng():
+        final_test_perp = evaluate_test_perplexity(plt_model, data_loader.test_dataloader, device)
+        checkpoint = torch.load(checkpoint_callback.best_model_path, map_location='cpu', weights_only=False)
+        plt_model.load_state_dict(checkpoint['state_dict'])
+        best_test_perp = evaluate_test_perplexity(plt_model, data_loader.test_dataloader, device)
+    plt_model.load_state_dict(final_state)
+    metrics = {
+        'arm': args.arm,
+        'iteration': args.loop_number,
+        'train_blocks': len(data_loader.train_dataset),
+        'best_epoch': checkpoint['epoch'],
+        'best_val_loss': checkpoint_callback.best_model_score.item(),
+        'reported_test_perp': trainer.callback_metrics['test_mean_perp'].item(),
+        'final_epoch_test_perp': final_test_perp,
+        'best_checkpoint_test_perp': best_test_perp,
+    }
+    with open(os.path.join(args.save_dir, args.version_name, 'checkpoint_metrics.json'), 'w') as f:
+        json.dump(metrics, f, indent=2)
+
+
 def loop(args):
+    args.data_role = 'train'
     hf_model_name = load_hf_model_name(args.model_tag)
     args.base_model_name = load_base_model_name(args)
     # when loaded via config file, the loss is much higher
@@ -95,11 +137,14 @@ def loop(args):
             val_dataloaders=data_loader.val_dataloader)
 
         trainer.test(plt_model, dataloaders=data_loader.test_dataloader)  # same as in log file
+        if args.log_checkpoint_metrics:
+            write_checkpoint_metrics(args, plt_model, trainer, checkpoint_callback, data_loader)
 
     if args.train_only is False and args.generate is not None:
         # load dataloader with original dataset in case loaded from generated for training
-        if args.load_generate is not None:
+        if args.load_generate is not None or args.arm == 'rotated_own':
             args.load_generate = None
+            args.data_role = 'generate'
             # load real dataset
             train_dataset, val_dataset, test_dataset = load_dataset(args)
 
@@ -135,14 +180,14 @@ def loop(args):
                     print('generating batch 1 of size', batch_size)
                 if args.do_sample is True or args.temperature:
                     do_sample = True
-                    outputs = model.generate(input_ids, num_beams=5, max_new_tokens=args.block_size,
+                    outputs = model.generate(input_ids, num_beams=args.num_beams, max_new_tokens=args.block_size,
                                              min_new_tokens=args.block_size,
                                              repetition_penalty=args.repetition_penalty,
                                              pad_token_id=tokenizer.eos_token_id,
                                              attention_mask=attention_mask,
                                              do_sample=do_sample, temperature=args.temperature)
                 else:
-                    outputs = model.generate(input_ids, num_beams=5, max_new_tokens=args.block_size,
+                    outputs = model.generate(input_ids, num_beams=args.num_beams, max_new_tokens=args.block_size,
                                              min_new_tokens=args.block_size,
                                              repetition_penalty=args.repetition_penalty,
                                              pad_token_id=tokenizer.eos_token_id,
@@ -235,7 +280,7 @@ def loop_wrapper(args):
 
         if len(model_tags) > 1 and args.train_only is False:
             # merge and split datasets
-            datasets = merge_split_datasets_same_family(ds_save_dirs, k)
+            datasets = merge_split_datasets_same_family(ds_save_dirs, k + args.partition_seed * 100003)
 
             # save datasets to load from
             for model_tag, ds in zip(model_tags, datasets):
