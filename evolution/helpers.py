@@ -1,4 +1,5 @@
 import argparse
+import copy
 import os
 import pickle
 from itertools import chain
@@ -9,7 +10,7 @@ import pandas as pd
 import torch
 from datasets import load_from_disk
 from datasets import load_dataset as load_dataset_hf, DatasetDict, concatenate_datasets
-from torch.utils.data import DataLoader, Dataset, random_split, ConcatDataset
+from torch.utils.data import DataLoader, Dataset, random_split, ConcatDataset, Subset
 from transformers import AutoTokenizer
 
 
@@ -251,6 +252,34 @@ def arguments_defaults():
             'help': 'Train on real dataset in first loop. Use --no-train_on_real to skip training on real dataset.',
         },
 
+        # data-rotation experiment
+        ('-arm', '--arm'): {
+            'type': str,
+            'choices': ['baseline', 'fixed_subset', 'rotated_own', 'rotated_real'],
+            'default': 'baseline',
+            'help': 'Single-model data condition. baseline keeps the original behavior. See README.',
+        },
+        ('-equivalent_models', '--equivalent_models'): {
+            'type': int,
+            'default': 8,
+            'help': 'Non-baseline arms train on N/equivalent_models blocks per iteration, matching D=M per-model size.',
+        },
+        ('-partition_seed', '--partition_seed'): {
+            'type': int,
+            'default': 0,
+            'help': 'Seed for data segments and rotation draws. The default reproduces the original fixed partition.',
+        },
+        ('-num_beams', '--num_beams'): {
+            'type': int,
+            'default': 5,
+            'help': 'Number of beams in generation. Use 1 with --temperature for plain sampling.',
+        },
+        ('-log_checkpoint_metrics', '--log_checkpoint_metrics'): {
+            'action': argparse.BooleanOptionalAction,
+            'default': False,
+            'help': 'Write test perplexity for final-epoch and best-checkpoint weights each iteration.',
+        },
+
     }
     return arguments
 
@@ -266,6 +295,18 @@ def evolution_args_preparation(args):
         else:
             if args.model_tag != args.model_tags[0]:
                 raise ValueError('model_tag is different from the first element of model_tags.')
+    if args.arm != 'baseline':
+        if args.number_models != 1:
+            raise ValueError('Non-baseline arms require --number_models 1.')
+        if args.equivalent_models < 2 or args.equivalent_models % 2 != 0:
+            raise ValueError('--equivalent_models must be an even number of at least 2.')
+        if args.generate_percentage > 0 or not args.small_dataset or not args.train_on_real:
+            raise ValueError('Non-baseline arms require the primary setting: no real-data mix, '
+                             'the small dataset, and real-data training at t=0.')
+        if args.train_only and args.arm != 'rotated_real':
+            raise ValueError('--train_only is only compatible with --arm rotated_real.')
+        if args.arm == 'rotated_real':  # real data needs no generation step
+            args.train_only = True
 
 
 def load_args_defaults():
@@ -591,8 +632,10 @@ def load_dataset(args):
     test_dataset = WikiText2Dataset(dataset=dataset, partition='test', tokenizer=tokenizer)
     print('lengths original of train, val, test: ', len(train_dataset), len(val_dataset), len(test_dataset))
     if args.small_dataset and (args.load_generate is None or args.small_dataset_train_only is False):
+        full_train_dataset = train_dataset
         train_dataset, new_val_dataset, new_test_dataset = load_small_dataset(train_dataset, val_dataset, test_dataset,
                                                                               args)
+        train_dataset = select_real_data_for_arm(train_dataset, full_train_dataset, val_dataset, test_dataset, args)
 
         if args.small_dataset_train_only is False:
             val_dataset = new_val_dataset
@@ -616,10 +659,40 @@ def load_dataset(args):
 
             train_dataset = ConcatDataset([train_dataset, train_dataset_loaded])
             assert len(train_dataset) == len_loaded_orig
+        elif args.arm == 'rotated_own':
+            train_dataset = draw_rotating_subset(train_dataset_loaded, args)
         else:
             train_dataset = train_dataset_loaded
     print('lengths of train, val, test: ', len(train_dataset), len(val_dataset), len(test_dataset))
     return train_dataset, val_dataset, test_dataset
+
+
+def draw_rotating_subset(pool, args):
+    """Draws a fresh N/equivalent_models subset of the pool for the current iteration."""
+    size = round(len(pool) / args.equivalent_models)
+    generator = torch.Generator().manual_seed(args.partition_seed * 100003 + args.loop_number)
+    indices = torch.randperm(len(pool), generator=generator)[:size].tolist()
+    return Subset(pool, indices)
+
+
+def select_real_data_for_arm(pool, full_train_dataset, val_dataset, test_dataset, args):
+    """Selects the real blocks used for training or generation prompts in the current arm.
+
+    fixed_subset:  the same segment at t=0 and for all prompts.
+    rotated_own:   the segment at t=0, then prompts from the whole pool at every iteration.
+    rotated_real:  the segment at t=0, then a fresh draw from the pool at every iteration.
+    """
+    if args.arm == 'baseline':
+        return pool
+    if args.arm == 'rotated_own' and args.data_role == 'generate':
+        return pool
+    if args.arm == 'rotated_real' and args.loop_number > 0:
+        return draw_rotating_subset(pool, args)
+    # Same blocks as model 0 of the D=equivalent_models ecosystem with this partition seed.
+    segment_args = copy.copy(args)
+    segment_args.number_models = args.equivalent_models
+    segment_args.slice_number = '0'
+    return load_small_dataset(full_train_dataset, val_dataset, test_dataset, segment_args)[0]
 
 
 def load_small_dataset(train_dataset, val_dataset, test_dataset, args):
@@ -631,7 +704,7 @@ def load_small_dataset(train_dataset, val_dataset, test_dataset, args):
     slices = [fraction] * int(1 / fraction)
 
     def load_slice(dataset_i, slice_number_i, slices_i=slices):
-        generator1 = torch.Generator().manual_seed(0)
+        generator1 = torch.Generator().manual_seed(args.partition_seed)
         new_ds = random_split(dataset_i, slices_i, generator=generator1)[slice_number_i]
         return new_ds
 
