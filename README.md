@@ -1,5 +1,7 @@
 # diversity-model-collapse
 
+This repository is based on [hodeld/diversity-model-collapse](https://github.com/hodeld/diversity-model-collapse) at commit `cb73c24`. That repository has no license file, so its code remains the original authors' work and is not covered by this repository's `LICENSE`.
+
 Code for the paper "Epistemic diversity across models mitigates knowledge collapse"
 
 ## Minimal setup
