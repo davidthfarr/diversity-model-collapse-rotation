@@ -78,6 +78,16 @@ check('metrics report both model states', {'best_epoch', 'best_checkpoint_test_p
 check('final-epoch evaluation matches the reported value',
       abs(metric['final_epoch_test_perp'] - metric['reported_test_perp']) < 1e-2 * metric['reported_test_perp'])
 
+skipped = run(*one, '--log_checkpoint_metrics', '--skip_final_generate')
+check('skip_final_generate drops only the last dataset',
+      set(skipped['generated']) == {'opt125-s0/0', 'opt125-s0/1'} and
+      all(skipped['generated'][k] == logged['generated'][k] for k in skipped['generated']))
+check('skip_final_generate leaves metrics unchanged', all(
+    abs(skipped['metrics'][k]['reported_test_perp'] - logged['metrics'][k]['reported_test_perp']) < 1e-6
+    for k in logged['metrics']))
+eco_skip = run('--number_models', '2', '--skip_final_generate')
+check('skip_final_generate works for ecosystems', len(eco_skip['generated']) == 4)
+
 greedy = run(*one, '--num_beams', '1', '-nl', '1')
 check('num_beams changes generation', greedy['generated_sha256'] != run(*one, '-nl', '1')['generated_sha256'])
 

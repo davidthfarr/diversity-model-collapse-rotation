@@ -55,6 +55,22 @@ Other options:
 * `--num_beams`: sets generation beams (default 5). Use `--num_beams 1 --temperature 1` for plain sampling.
 * `--log_checkpoint_metrics`: writes `checkpoint_metrics.json` in each version folder, with test perplexity for the final-epoch and best-checkpoint weights.
 
-Run all five conditions with `experiments/run_rotation.sh`. `MODEL`, `SEEDS`, `ITERATIONS`, and `MAIN_DIR` can be set as environment variables.
+* `--skip_final_generate`: skips generation after the last iteration, whose output is never used.
 
-Check the data flow with `python tests/test_rotation_arms.py [UPSTREAM_CHECKOUT]`. This uses a tiny model and synthetic tokens, so it tests plumbing rather than results.
+### Running
+`experiments/run_rotation.py` queues every arm and seed and runs them across GPUs:
+
+```bash
+python experiments/run_rotation.py --gpus 0 1 --jobs-per-gpu 2
+```
+
+Seeds run in order, so seed 0 finishes first and works as a pilot while later seeds continue. Each job logs to `MAIN_DIR/logs/` and marks its folder `.done` when it finishes. Rerunning the same command skips finished jobs. A folder from an unfinished job must be deleted first. Use `--dry-run` to print the commands. Other arguments, such as `--num_beams 1`, are passed to every job.
+
+Summarize results at any point, including while jobs are running:
+
+```bash
+python experiments/summarize_rotation.py --plot rotation.png
+python experiments/summarize_rotation.py --metric best
+```
+
+Check the data flow with `python tests/test_rotation_arms.py [UPSTREAM_CHECKOUT]` and the launcher with `python tests/test_launcher.py`. These use a tiny model and synthetic tokens, so it tests plumbing rather than results.

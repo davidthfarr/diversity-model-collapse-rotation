@@ -274,6 +274,11 @@ def arguments_defaults():
             'default': 5,
             'help': 'Number of beams in generation. Use 1 with --temperature for plain sampling.',
         },
+        ('-skip_final_generate', '--skip_final_generate'): {
+            'action': argparse.BooleanOptionalAction,
+            'default': False,
+            'help': 'Skip generation after the last iteration, whose output is never used.',
+        },
         ('-log_checkpoint_metrics', '--log_checkpoint_metrics'): {
             'action': argparse.BooleanOptionalAction,
             'default': False,

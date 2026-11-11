@@ -239,6 +239,7 @@ def loop_wrapper(args):
 
         args.version_name = vrs_save
         args.loop_number = k
+        skip_generate = args.skip_final_generate and k == args.number_loops - 1
         ds_save_dirs = []
         for model_tag, slice_number in zip(model_tags, args.slice_numbers):
             print('model_tag', model_tag, 'slice_number', slice_number, )
@@ -267,8 +268,8 @@ def loop_wrapper(args):
 
             if args.train_only:
                 args.load_generate = None
-            args.generate = os.path.join(save_dir, vrs_save,
-                                         f'{save_ds_name}_{vrs_save}.pkl')  # path to save generated dataset
+            args.generate = None if skip_generate else os.path.join(
+                save_dir, vrs_save, f'{save_ds_name}_{vrs_save}.pkl')  # path to save generated dataset
             ds_save_dirs += [args.generate]
             # set name of the saved model to save
             args.save_name = os.path.join(save_dir, vrs_save, 'checkpoints', 'best')
@@ -278,7 +279,7 @@ def loop_wrapper(args):
                 gc.collect()  # free memory
                 torch.cuda.empty_cache()  # free memory
 
-        if len(model_tags) > 1 and args.train_only is False:
+        if len(model_tags) > 1 and args.train_only is False and not skip_generate:
             # merge and split datasets
             datasets = merge_split_datasets_same_family(ds_save_dirs, k + args.partition_seed * 100003)
 
