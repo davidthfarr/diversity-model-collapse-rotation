@@ -54,7 +54,6 @@ Other options:
 * `--partition_seed`: varies data segments and rotation draws (default 0, the original partition).
 * `--num_beams`: sets generation beams (default 5). Use `--num_beams 1 --temperature 1` for plain sampling.
 * `--log_checkpoint_metrics`: writes `checkpoint_metrics.json` in each version folder, with test perplexity for the final-epoch and best-checkpoint weights.
-
 * `--skip_final_generate`: skips generation after the last iteration, whose output is never used.
 
 ### Running
@@ -73,4 +72,4 @@ python experiments/summarize_rotation.py --plot rotation.png
 python experiments/summarize_rotation.py --metric best
 ```
 
-Check the data flow with `python tests/test_rotation_arms.py [UPSTREAM_CHECKOUT]` and the launcher with `python tests/test_launcher.py`. These use a tiny model and synthetic tokens, so it tests plumbing rather than results.
+Check the data flow with `python tests/test_rotation_arms.py [UPSTREAM_CHECKOUT]` and the launcher with `python tests/test_launcher.py`. These use a tiny model and synthetic tokens, so they test plumbing rather than results.
